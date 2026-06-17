@@ -5,7 +5,7 @@ import plotly.express as px
 from io import BytesIO
 
 st.set_page_config(page_title="📊 Расчёт заказа и ABC-анализ", layout="wide")
-st.title("📊 Автоматизация расчёта заказа и ABC-анализ")
+st.title("📊 Автоматизация расчёта заказа и ABC-анализ (с ручной корректировкой)")
 
 # ------------------------------------------------------------
 # Жёсткий порядок городов (из Заголовки.xlsx)
@@ -31,9 +31,7 @@ def find_class_columns(df: pd.DataFrame) -> list:
     """
     class_set = {'A', 'B', 'C', 'a', 'b', 'c'}
     class_cols = []
-    # Проверяем все столбцы, начиная с третьего (индекс 2)
     for i in range(2, len(df.columns)):
-        # Проверяем, есть ли в этом столбце хотя бы одно значение из class_set
         col_data = df.iloc[:, i]
         found = False
         for val in col_data:
@@ -59,13 +57,26 @@ target_days = st.sidebar.slider(
     "Целевой период обеспечения (дней)",
     min_value=1, max_value=90, value=14, step=1
 )
+
+st.sidebar.markdown("---")
+keep_overrides = st.sidebar.checkbox(
+    "Сохранять ручные правки при пересчёте",
+    value=True,
+    help="Если включено, ваши изменения в столбце «К заказу» сохраняются и переопределяют расчёт. Если выключено, правки сбрасываются и используются только расчётные значения."
+)
+if st.sidebar.button("Сбросить все ручные правки"):
+    st.session_state.manual_overrides = {}
+    st.rerun()
+
 st.sidebar.markdown("---")
 st.sidebar.info(
     "**Формула расчёта:**\n\n"
     "1. Среднедневные продажи берутся напрямую из столбца 'Ср. продажа в день за период, шт'\n"
     "2. Потребность = (Среднедневные продажи × Целевой период) – Остаток – В пути\n"
     "3. Если потребность < 0 → 0\n"
-    "4. Округление до целого вверх"
+    "4. Округление до целого вверх\n\n"
+    "💡 Вы можете **редактировать** значения «К заказу» во вкладке «Детализация по городам». "
+    "Отредактированные значения сохраняются и используются в сводной матрице и при выгрузке."
 )
 
 # ------------------------------------------------------------
@@ -88,100 +99,122 @@ if uploaded_file is not None:
             st.error("Не найдено ни одного блока с классом (A/B/C). Проверьте структуру файла.")
             st.stop()
 
-        # Обрабатываем каждый найденный блок
-        city_data = {}
-        for idx, city in enumerate(CITY_ORDER):
-            if idx >= len(class_indices):
-                break  # городов в файле меньше, чем в списке
-            start_col = class_indices[idx]
-            # Проверяем, что блок содержит данные (не все пустые)
-            block = df_raw.iloc[:, start_col:start_col+10]  # 10 столбцов показателей
-            if block.isnull().all().all():
-                # блок полностью пуст – пропускаем
-                continue
+        # Инициализируем хранение ручных правок в session_state
+        if 'manual_overrides' not in st.session_state:
+            st.session_state.manual_overrides = {}
 
-            # Извлекаем нужные столбцы:
-            # 0: Класс, 1: Количество, 2: Остаток, 3: Свободный, 4: Товары в пути,
-            # 5: Итоговый остаток, 6: Ср. продажи, 7: Себестоимость, 8: Остаток по себест., 9: Расчет к заказу
-            col_ost = start_col + 5   # Итоговый остаток
-            col_sales = start_col + 6 # Среднедневные продажи
-            col_in_transit = start_col + 4 # Товары в пути
+        # Функция пересчёта всех городов (возвращает city_data)
+        def recalculate_city_data(target_days, days_in_report, keep_overrides):
+            city_data = {}
+            # Если режим сохранения правок выключен, очищаем все правки
+            if not keep_overrides:
+                st.session_state.manual_overrides = {}
 
-            city_df = df_raw[['Товар', col_ost, col_sales, col_in_transit]].copy()
-            city_df.columns = ['Товар', 'Остаток', 'Среднедневные продажи', 'В пути']
+            overrides = st.session_state.manual_overrides
+            for idx, city in enumerate(CITY_ORDER):
+                if idx >= len(class_indices):
+                    break
+                start_col = class_indices[idx]
+                block = df_raw.iloc[:, start_col:start_col+10]
+                if block.isnull().all().all():
+                    continue
 
-            # Преобразуем в числа
-            for col in ['Остаток', 'Среднедневные продажи', 'В пути']:
-                city_df[col] = safe_convert_to_float(city_df[col])
+                col_ost = start_col + 5
+                col_sales = start_col + 6
+                col_in_transit = start_col + 4
 
-            # Расчёт потребности
-            daily_sales = city_df['Среднедневные продажи']
-            need = (daily_sales * target_days) - city_df['Остаток'] - city_df['В пути']
-            city_df['К заказу'] = np.ceil(np.maximum(need, 0)).astype(int)
+                city_df = df_raw[['Товар', col_ost, col_sales, col_in_transit]].copy()
+                city_df.columns = ['Товар', 'Остаток', 'Среднедневные продажи', 'В пути']
 
-            # Продажи за период для ABC-анализа
-            city_df['Продажи за период'] = daily_sales * days_in_report
-            total_sales = city_df['Продажи за период'].sum()
+                for col in ['Остаток', 'Среднедневные продажи', 'В пути']:
+                    city_df[col] = safe_convert_to_float(city_df[col])
 
-            # ABC-анализ
-            if total_sales == 0:
-                city_df['Категория ABC'] = 'C'
-            else:
-                sorted_df = city_df.sort_values('Продажи за период', ascending=False).copy()
-                sorted_df['cum_sales'] = sorted_df['Продажи за период'].cumsum()
-                sorted_df['cum_perc'] = sorted_df['cum_sales'] / total_sales
+                daily_sales = city_df['Среднедневные продажи']
+                need = (daily_sales * target_days) - city_df['Остаток'] - city_df['В пути']
+                raw_need = np.ceil(np.maximum(need, 0)).astype(int)
+                city_df['К заказу (расчёт)'] = raw_need
 
-                def assign_abc(row):
-                    if row['Продажи за период'] == 0:
-                        return 'C'
-                    if row['cum_perc'] <= 0.8:
-                        return 'A'
-                    elif row['cum_perc'] <= 0.95:
-                        return 'B'
-                    else:
-                        return 'C'
+                # Применяем ручные правки, если режим включён
+                if keep_overrides:
+                    for idx_row, product in enumerate(city_df['Товар']):
+                        key = (city, product)
+                        if key in overrides and pd.notna(overrides[key]):
+                            city_df.loc[idx_row, 'К заказу'] = overrides[key]
+                        else:
+                            city_df.loc[idx_row, 'К заказу'] = raw_need[idx_row]
+                else:
+                    # Режим выключен – используем только расчёт
+                    city_df['К заказу'] = raw_need
 
-                sorted_df['Категория ABC'] = sorted_df.apply(assign_abc, axis=1)
-                city_df = city_df.merge(sorted_df[['Товар', 'Категория ABC']], on='Товар', how='left')
+                # Продажи за период для ABC
+                city_df['Продажи за период'] = daily_sales * days_in_report
+                total_sales = city_df['Продажи за период'].sum()
 
-            city_df.set_index('Товар', inplace=True)
-            city_data[city] = city_df
+                if total_sales == 0:
+                    city_df['Категория ABC'] = 'C'
+                else:
+                    sorted_df = city_df.sort_values('Продажи за период', ascending=False).copy()
+                    sorted_df['cum_sales'] = sorted_df['Продажи за период'].cumsum()
+                    sorted_df['cum_perc'] = sorted_df['cum_sales'] / total_sales
+
+                    def assign_abc(row):
+                        if row['Продажи за период'] == 0:
+                            return 'C'
+                        if row['cum_perc'] <= 0.8:
+                            return 'A'
+                        elif row['cum_perc'] <= 0.95:
+                            return 'B'
+                        else:
+                            return 'C'
+
+                    sorted_df['Категория ABC'] = sorted_df.apply(assign_abc, axis=1)
+                    city_df = city_df.merge(sorted_df[['Товар', 'Категория ABC']], on='Товар', how='left')
+
+                city_df.set_index('Товар', inplace=True)
+                city_df = city_df[['Остаток', 'Среднедневные продажи', 'В пути',
+                                   'Продажи за период', 'К заказу', 'Категория ABC']]
+                city_data[city] = city_df
+            return city_data
+
+        # Пересчитываем данные
+        city_data = recalculate_city_data(target_days, days_in_report, keep_overrides)
 
         if not city_data:
             st.error("Не удалось обработать ни одного города. Проверьте структуру файла.")
             st.stop()
 
+        # Функция построения сводной матрицы с учётом правок
+        def build_matrix(city_data):
+            all_products = sorted(df_raw['Товар'].unique())
+            matrix = pd.DataFrame(index=all_products, columns=list(city_data.keys()))
+            for city, cdf in city_data.items():
+                matrix[city] = matrix.index.map(lambda p: cdf.loc[p, 'К заказу'] if p in cdf.index else 0)
+            matrix['Итого'] = matrix.sum(axis=1)
+            return matrix
+
+        matrix = build_matrix(city_data)
+
         st.success(f"Успешно загружены данные по {len(city_data)} городам: {', '.join(city_data.keys())}")
 
-        # Сводная матрица
-        all_products = sorted(df_raw['Товар'].unique())
-        matrix = pd.DataFrame(index=all_products, columns=list(city_data.keys()))
-        for city, cdf in city_data.items():
-            matrix[city] = matrix.index.map(lambda p: cdf.loc[p, 'К заказу'] if p in cdf.index else 0)
-
-        # Добавляем столбец "Итого"
-        matrix['Итого'] = matrix.sum(axis=1)
-
-        # Генерация Excel-файла
-        def generate_excel(matrix, city_data):
-            output = BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                matrix.to_excel(writer, sheet_name='Сводная матрица', index=True)
-                for city, cdf in city_data.items():
-                    sheet = cdf.reset_index()[['Товар', 'Остаток', 'Среднедневные продажи', 'В пути',
-                                               'Продажи за период', 'К заказу', 'Категория ABC']]
-                    sheet.to_excel(writer, sheet_name=str(city)[:31], index=False)
-            output.seek(0)
-            return output
-
-        excel_data = generate_excel(matrix, city_data)
-
-        # Вкладки
-        tab1, tab2, tab3 = st.tabs(['📋 Сводная матрица', '🏙️ Детализация по городам', '📈 Интерактивные графики'])
+        # --- Вкладки ---
+        tab1, tab2, tab3 = st.tabs(['📋 Сводная матрица', '🏙️ Детализация по городам (с редактированием)', '📈 Интерактивные графики'])
 
         with tab1:
             st.subheader('Общая потребность в дозаказе по городам')
             st.dataframe(matrix, use_container_width=True)
+
+            def generate_excel(matrix, city_data):
+                output = BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    matrix.to_excel(writer, sheet_name='Сводная матрица', index=True)
+                    for city, cdf in city_data.items():
+                        sheet = cdf.reset_index()[['Товар', 'Остаток', 'Среднедневные продажи', 'В пути',
+                                                   'Продажи за период', 'К заказу', 'Категория ABC']]
+                        sheet.to_excel(writer, sheet_name=str(city)[:31], index=False)
+                output.seek(0)
+                return output
+
+            excel_data = generate_excel(matrix, city_data)
             st.download_button(
                 label='📥 Скачать итоговый Excel-файл',
                 data=excel_data,
@@ -190,19 +223,97 @@ if uploaded_file is not None:
             )
 
         with tab2:
-            st.subheader('Детализация по выбранному городу')
+            st.subheader('Детализация по выбранному городу (редактируйте «К заказу»)')
             selected_city = st.selectbox('Выберите город', list(city_data.keys()))
+
             if selected_city:
+                # Получаем DataFrame для города и сбрасываем индекс
                 cdf = city_data[selected_city].reset_index()
-                st.dataframe(
-                    cdf[['Товар', 'Остаток', 'Среднедневные продажи', 'В пути',
-                         'Продажи за период', 'К заказу', 'Категория ABC']],
-                    use_container_width=True
+                display_cols = ['Товар', 'Остаток', 'Среднедневные продажи', 'В пути',
+                                'Продажи за период', 'К заказу', 'Категория ABC']
+                edit_df = cdf[display_cols].copy()
+
+                # Используем data_editor с разрешением редактирования только колонки "К заказу"
+                edited_df = st.data_editor(
+                    edit_df,
+                    column_config={
+                        "К заказу": st.column_config.NumberColumn(
+                            "К заказу",
+                            help="Введите нужное количество. Изменения сохраняются и влияют на сводную матрицу.",
+                            min_value=0,
+                            step=1
+                        )
+                    },
+                    disabled=['Товар', 'Остаток', 'Среднедневные продажи', 'В пути', 'Продажи за период', 'Категория ABC'],
+                    use_container_width=True,
+                    key=f"editor_{selected_city}"
                 )
-                st.metric(f'Всего единиц к заказу в г. {selected_city}', cdf['К заказу'].sum())
+
+                # Обновляем ручные правки на основе изменений в редакторе
+                # Сравниваем с исходным cdf, чтобы найти изменённые ячейки
+                # Для простоты обновляем все значения, которые были изменены
+                # Но важно не перезаписывать правки, если они не изменились
+                # Мы можем просто сохранить все значения из edited_df как правки
+                # (даже если они совпадают с расчётными – это нормально)
+                # Однако нужно удалять правку, если пользователь очистил ячейку (NaN)
+                overrides = st.session_state.manual_overrides
+                for idx, row in edited_df.iterrows():
+                    product = row['Товар']
+                    new_val = row['К заказу']
+                    key = (selected_city, product)
+                    if pd.isna(new_val):
+                        # Удаляем правку
+                        if key in overrides:
+                            del overrides[key]
+                    else:
+                        # Сохраняем как правку (даже если равно расчётному)
+                        overrides[key] = int(new_val)
+
+                # Если режим сохранения правок выключен, принудительно очищаем все правки
+                if not keep_overrides:
+                    st.session_state.manual_overrides = {}
+                    # И пересчитываем данные, чтобы сбросить все к расчётным
+                    city_data = recalculate_city_data(target_days, days_in_report, keep_overrides)
+                    matrix = build_matrix(city_data)
+                    st.rerun()
+
+                # В любом случае, после редактирования пересчитываем данные,
+                # чтобы обновить матрицу и другие вкладки
+                # Но чтобы не было бесконечного цикла, вызываем rerun только если были изменения
+                # Для простоты будем вызывать всегда, но проверяем, изменились ли правки
+                # Можно сравнить текущие правки с предыдущими, но для демонстрации оставим так:
+                city_data = recalculate_city_data(target_days, days_in_report, keep_overrides)
+                matrix = build_matrix(city_data)
+                # Обновляем сессионные переменные (если нужно)
+                st.session_state['city_data'] = city_data
+                st.session_state['matrix'] = matrix
+                # Вызов rerun для обновления интерфейса (если изменения были)
+                # Но мы не можем вызывать rerun внутри блока обработки редактора, это приведёт к циклу.
+                # Вместо этого мы можем использовать st.rerun() только если были изменения,
+                # но проще положиться на то, что Streamlit сам перерисует при следующем взаимодействии.
+                # Однако после редактирования данные в матрице обновятся только после следующего rerun.
+                # Чтобы обновить их сразу, можно использовать st.rerun().
+                # Но чтобы избежать бесконечного цикла, добавим условие: если были изменения в правках.
+                # Просто проверим, изменилось ли что-то в overrides по сравнению с предыдущим состоянием.
+                # Для упрощения: будем считать, что любое редактирование вызывает rerun.
+                # Это нормально, т.к. пользователь ожидает обновления.
+                # Но нужно избежать rerun, если ничего не изменилось.
+                # Мы можем сохранить предыдущие правки и сравнить.
+                # Для надёжности добавим флаг в session_state.
+                if 'last_overrides_hash' not in st.session_state:
+                    st.session_state.last_overrides_hash = hash(frozenset(overrides.items()))
+                current_hash = hash(frozenset(overrides.items()))
+                if current_hash != st.session_state.last_overrides_hash:
+                    st.session_state.last_overrides_hash = current_hash
+                    st.rerun()
+
+                # Отображаем метрику
+                total_order = cdf['К заказу'].sum() if 'К заказу' in cdf else 0
+                st.metric(f'Всего единиц к заказу в г. {selected_city}', total_order)
 
         with tab3:
             st.subheader('Продажи товара по городам')
+            all_products = sorted(df_raw['Товар'].unique())
             selected_product = st.selectbox('Выберите товар', all_products)
             if selected_product:
                 sales_data = {}
