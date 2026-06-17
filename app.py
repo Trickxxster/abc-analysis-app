@@ -39,7 +39,7 @@ def find_class_columns(df: pd.DataFrame) -> list:
             class_cols.append(i)
     return class_cols
 
-def recalculate_city_data(df_raw, class_indices, target_days, days_in_report, manual_overrides):
+def recalculate_all(df_raw, class_indices, target_days, days_in_report, manual_overrides):
     city_data = {}
     for idx, city in enumerate(CITY_ORDER):
         if idx >= len(class_indices):
@@ -110,19 +110,31 @@ def build_matrix(city_data):
     return matrix
 
 # ------------------------------------------------------------
+# Инициализация состояния
+# ------------------------------------------------------------
+for key in ['manual_overrides', 'city_data', 'matrix', 'target_days', 'days_in_report',
+            'df_raw', 'class_indices', 'uploaded_file']:
+    if key not in st.session_state:
+        if key == 'target_days':
+            st.session_state[key] = 14
+        elif key == 'days_in_report':
+            st.session_state[key] = 30
+        else:
+            st.session_state[key] = None
+
+# ------------------------------------------------------------
 # Боковая панель
 # ------------------------------------------------------------
 st.sidebar.header("⚙️ Загрузка данных и настройки")
 uploaded_file = st.sidebar.file_uploader("Загрузите Excel-файл с данными (без заголовков)", type=["xlsx", "xls"])
 days_in_report = st.sidebar.number_input(
     "Количество дней в выгрузке продаж (из 1С)",
-    min_value=1, max_value=365, value=30, step=1
+    min_value=1, max_value=365, value=st.session_state.days_in_report, step=1
 )
 target_days = st.sidebar.slider(
     "Целевой период обеспечения (дней)",
-    min_value=1, max_value=90, value=14, step=1
+    min_value=1, max_value=90, value=st.session_state.target_days, step=1
 )
-
 reset_overrides = st.sidebar.button("🔄 Сбросить все ручные правки")
 
 st.sidebar.markdown("---")
@@ -136,68 +148,77 @@ st.sidebar.info(
 )
 
 # ------------------------------------------------------------
-# Инициализация состояния
-# ------------------------------------------------------------
-if 'manual_overrides' not in st.session_state:
-    st.session_state.manual_overrides = {}
-if 'city_data' not in st.session_state:
-    st.session_state.city_data = None
-if 'matrix' not in st.session_state:
-    st.session_state.matrix = None
-if 'last_target_days' not in st.session_state:
-    st.session_state.last_target_days = target_days
-if 'last_days_in_report' not in st.session_state:
-    st.session_state.last_days_in_report = days_in_report
-if 'df_raw' not in st.session_state:
-    st.session_state.df_raw = None
-if 'class_indices' not in st.session_state:
-    st.session_state.class_indices = None
-
-# ------------------------------------------------------------
-# Основная логика загрузки и пересчёта
+# Основная логика
 # ------------------------------------------------------------
 if uploaded_file is not None:
-    # Если файл новый или изменился – загружаем и сохраняем в сессию
-    if st.session_state.df_raw is None:
+    # Загрузка нового файла
+    if st.session_state.uploaded_file != uploaded_file:
         df_raw = pd.read_excel(uploaded_file, header=None)
         product_col = df_raw[0].astype(str).fillna('')
         char_col = df_raw[1].astype(str).fillna('')
         df_raw['Товар'] = (product_col + ' ' + char_col).str.strip()
         st.session_state.df_raw = df_raw
         st.session_state.class_indices = find_class_columns(df_raw)
-        # При новом файле сбрасываем правки
+        st.session_state.uploaded_file = uploaded_file
         st.session_state.manual_overrides = {}
-
-    # Проверяем, изменился ли слайдер или дни – сбрасываем правки
-    if (target_days != st.session_state.last_target_days or 
-        days_in_report != st.session_state.last_days_in_report):
-        st.session_state.manual_overrides = {}
-        st.session_state.last_target_days = target_days
-        st.session_state.last_days_in_report = days_in_report
-
-    if reset_overrides:
-        st.session_state.manual_overrides = {}
-
-    # Пересчитываем, если данные не загружены или изменились параметры
-    if (st.session_state.city_data is None or 
-        st.session_state.last_target_days != target_days or
-        st.session_state.last_days_in_report != days_in_report or
-        reset_overrides):
-        city_data = recalculate_city_data(
+        st.session_state.target_days = target_days
+        st.session_state.days_in_report = days_in_report
+        # Пересчёт
+        city_data = recalculate_all(
             st.session_state.df_raw,
             st.session_state.class_indices,
-            target_days,
-            days_in_report,
+            st.session_state.target_days,
+            st.session_state.days_in_report,
             st.session_state.manual_overrides
         )
         matrix = build_matrix(city_data)
         st.session_state.city_data = city_data
         st.session_state.matrix = matrix
-        # обновляем последние параметры
-        st.session_state.last_target_days = target_days
-        st.session_state.last_days_in_report = days_in_report
 
-    # Если city_data нет – ошибка
+    # Изменение слайдера или дней – сброс правок и пересчёт
+    if (target_days != st.session_state.target_days or 
+        days_in_report != st.session_state.days_in_report):
+        st.session_state.manual_overrides = {}
+        st.session_state.target_days = target_days
+        st.session_state.days_in_report = days_in_report
+        city_data = recalculate_all(
+            st.session_state.df_raw,
+            st.session_state.class_indices,
+            st.session_state.target_days,
+            st.session_state.days_in_report,
+            st.session_state.manual_overrides
+        )
+        matrix = build_matrix(city_data)
+        st.session_state.city_data = city_data
+        st.session_state.matrix = matrix
+
+    # Кнопка сброса
+    if reset_overrides:
+        st.session_state.manual_overrides = {}
+        city_data = recalculate_all(
+            st.session_state.df_raw,
+            st.session_state.class_indices,
+            st.session_state.target_days,
+            st.session_state.days_in_report,
+            st.session_state.manual_overrides
+        )
+        matrix = build_matrix(city_data)
+        st.session_state.city_data = city_data
+        st.session_state.matrix = matrix
+
+    # Если данные ещё не загружены (первый запуск)
+    if st.session_state.city_data is None and st.session_state.df_raw is not None:
+        city_data = recalculate_all(
+            st.session_state.df_raw,
+            st.session_state.class_indices,
+            st.session_state.target_days,
+            st.session_state.days_in_report,
+            st.session_state.manual_overrides
+        )
+        matrix = build_matrix(city_data)
+        st.session_state.city_data = city_data
+        st.session_state.matrix = matrix
+
     if st.session_state.city_data is None:
         st.error("Не удалось обработать данные. Проверьте структуру файла.")
         st.stop()
@@ -269,27 +290,23 @@ if uploaded_file is not None:
                         del st.session_state.manual_overrides[key]
                         changed = True
                 else:
-                    # Если значение изменилось или его не было – обновляем
                     if key not in st.session_state.manual_overrides or st.session_state.manual_overrides[key] != int(new_val):
                         st.session_state.manual_overrides[key] = int(new_val)
                         changed = True
 
             if changed:
-                # Пересчитываем city_data и matrix с новыми правками
-                new_city_data = recalculate_city_data(
+                city_data_new = recalculate_all(
                     st.session_state.df_raw,
                     st.session_state.class_indices,
-                    target_days,
-                    days_in_report,
+                    st.session_state.target_days,
+                    st.session_state.days_in_report,
                     st.session_state.manual_overrides
                 )
-                new_matrix = build_matrix(new_city_data)
-                st.session_state.city_data = new_city_data
-                st.session_state.matrix = new_matrix
-                # Обновляем локальные переменные для текущего отображения
-                city_data = new_city_data
-                matrix = new_matrix
-                # Перерисовываем – изменения уже видны в tab1
+                matrix_new = build_matrix(city_data_new)
+                st.session_state.city_data = city_data_new
+                st.session_state.matrix = matrix_new
+                city_data = city_data_new
+                matrix = matrix_new
 
             total_order = cdf['К заказу'].sum() if 'К заказу' in cdf else 0
             st.metric(f'Всего единиц к заказу в г. {selected_city}', total_order)
