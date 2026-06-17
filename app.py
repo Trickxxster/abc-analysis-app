@@ -26,18 +26,24 @@ def safe_convert_to_float(series: pd.Series) -> pd.Series:
 
 def find_class_columns(df: pd.DataFrame) -> list:
     """
-    Находит индексы столбцов, в которых в первой строке данных стоит класс (A, B или C).
+    Находит индексы столбцов, в которых в любой строке данных стоит класс (A, B или C).
     Возвращает список индексов (начиная с 0) в порядке возрастания.
     """
     class_set = {'A', 'B', 'C', 'a', 'b', 'c'}
     class_cols = []
-    first_row = df.iloc[0]  # первая строка данных
-    for i in range(2, len(df.columns)):  # начинаем с третьего столбца (индекс 2)
-        val = first_row.iloc[i]
-        if pd.notna(val):
-            s = str(val).strip()
-            if s in class_set:
-                class_cols.append(i)
+    # Проверяем все столбцы, начиная с третьего (индекс 2)
+    for i in range(2, len(df.columns)):
+        # Проверяем, есть ли в этом столбце хотя бы одно значение из class_set
+        col_data = df.iloc[:, i]
+        found = False
+        for val in col_data:
+            if pd.notna(val):
+                s = str(val).strip()
+                if s in class_set:
+                    found = True
+                    break
+        if found:
+            class_cols.append(i)
     return class_cols
 
 # ------------------------------------------------------------
@@ -76,7 +82,7 @@ if uploaded_file is not None:
         df_raw['Товар'] = product_col + ' ' + char_col
         df_raw['Товар'] = df_raw['Товар'].str.strip()
 
-        # Находим столбцы с классами
+        # Находим столбцы с классами (по всем строкам)
         class_indices = find_class_columns(df_raw)
         if not class_indices:
             st.error("Не найдено ни одного блока с классом (A/B/C). Проверьте структуру файла.")
@@ -153,13 +159,10 @@ if uploaded_file is not None:
         for city, cdf in city_data.items():
             matrix[city] = matrix.index.map(lambda p: cdf.loc[p, 'К заказу'] if p in cdf.index else 0)
 
-        # --- Добавляем столбец "Итого" (сумма по строке) ---
+        # Добавляем столбец "Итого"
         matrix['Итого'] = matrix.sum(axis=1)
 
-        # (Опционально) Можно добавить итоговую строку "Всего" по городам
-        # matrix.loc['Всего'] = matrix.sum(axis=0)
-
-        # Генерация Excel-файла (теперь с Итого)
+        # Генерация Excel-файла
         def generate_excel(matrix, city_data):
             output = BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
