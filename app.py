@@ -83,49 +83,43 @@ st.sidebar.info(
 # ------------------------------------------------------------
 if uploaded_file is not None:
     try:
-        # Читаем весь файл без заголовков (чтобы сохранить все строки)
-        df_raw = pd.read_excel(uploaded_file, header=None)
+        # Читаем файл с двумя строками заголовков (MultiIndex)
+        df_raw = pd.read_excel(uploaded_file, header=[0, 1])
 
-        # Первая строка – названия городов (с объединёнными ячейками)
-        header_city = df_raw.iloc[0].values
-        # Вторая строка – названия показателей (остаток, продажи, в пути и др.)
-        header_metric = df_raw.iloc[1].values
-        # Данные – все строки, начиная с третьей
-        df_data = df_raw.iloc[2:].reset_index(drop=True)
-
-        # Если количество столбцов в данных не совпадает с заголовками – обрезаем до минимума
-        if len(header_city) != df_data.shape[1]:
-            min_cols = min(len(header_city), df_data.shape[1])
-            header_city = header_city[:min_cols]
-            header_metric = header_metric[:min_cols]
-            df_data = df_data.iloc[:, :min_cols]
-
-        # Формируем новые имена столбцов
+        # Преобразуем MultiIndex в плоские имена столбцов
         new_columns = []
         current_city = None
-        for j in range(len(header_city)):
-            if j == 0:
+
+        for idx, (city_val, metric_val) in enumerate(df_raw.columns):
+            if idx == 0:
                 # Первый столбец – номенклатура
                 new_columns.append("Товар")
                 continue
 
-            city_val = str(header_city[j]) if pd.notna(header_city[j]) else ''
-            metric_val = str(header_metric[j]) if pd.notna(header_metric[j]) else ''
+            # Извлекаем город из первого уровня (может быть NaN для пустых ячеек)
+            if pd.notna(city_val):
+                extracted = extract_city_from_string(str(city_val))
+                if extracted:
+                    current_city = extracted
 
-            # Извлекаем город из значения (если он там есть)
-            extracted = extract_city_from_string(city_val)
-            if extracted:
-                current_city = extracted
-
+            # Формируем имя столбца
             if current_city:
-                col_name = f"{current_city} | {metric_val}" if metric_val else current_city
+                if pd.notna(metric_val):
+                    col_name = f"{current_city} | {metric_val}"
+                else:
+                    col_name = current_city
             else:
-                col_name = metric_val if metric_val else f"Col_{j}"
+                col_name = str(metric_val) if pd.notna(metric_val) else f"Col_{idx}"
+
             new_columns.append(col_name)
 
-        # Присваиваем новые имена столбцам
-        df_data.columns = new_columns
-        df = df_data.copy()
+        # Убедимся, что число новых имён совпадает с числом столбцов
+        if len(new_columns) != df_raw.shape[1]:
+            st.error(f"Не совпадает количество столбцов: {len(new_columns)} vs {df_raw.shape[1]}")
+            st.stop()
+
+        df_raw.columns = new_columns
+        df = df_raw.copy()
 
         # Первый столбец – товар
         df["Товар"] = df["Товар"].astype(str).fillna("Без названия")
