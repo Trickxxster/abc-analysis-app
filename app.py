@@ -39,7 +39,6 @@ def find_city_columns(df: pd.DataFrame, city: str):
     Возвращает словарь {'остаток': col, 'продажи': col, 'в пути': col}
     """
     city_lower = city.lower()
-    # Уточнённые ключевые слова для поиска
     patterns = {
         'остаток': 'Итоговый остаток',
         'продажи': 'Ср. продажа в день за период',
@@ -84,46 +83,49 @@ st.sidebar.info(
 # ------------------------------------------------------------
 if uploaded_file is not None:
     try:
-        # Читаем первые две строки как заголовки (без данных)
-        header_rows = pd.read_excel(uploaded_file, header=None, nrows=2)
-        cities_row = header_rows.iloc[0].values
-        metrics_row = header_rows.iloc[1].values
+        # Читаем весь файл без заголовков (чтобы сохранить все строки)
+        df_raw = pd.read_excel(uploaded_file, header=None)
 
-        # Читаем данные, начиная с 3-й строки (индекс 2 в pandas)
-        data_df = pd.read_excel(uploaded_file, header=None, skiprows=2)
+        # Первая строка – названия городов (с объединёнными ячейками)
+        header_city = df_raw.iloc[0].values
+        # Вторая строка – названия показателей (остаток, продажи, в пути и др.)
+        header_metric = df_raw.iloc[1].values
+        # Данные – все строки, начиная с третьей
+        df_data = df_raw.iloc[2:].reset_index(drop=True)
+
+        # Если количество столбцов в данных не совпадает с заголовками – обрезаем до минимума
+        if len(header_city) != df_data.shape[1]:
+            min_cols = min(len(header_city), df_data.shape[1])
+            header_city = header_city[:min_cols]
+            header_metric = header_metric[:min_cols]
+            df_data = df_data.iloc[:, :min_cols]
 
         # Формируем новые имена столбцов
         new_columns = []
         current_city = None
-        for j in range(len(cities_row)):
-            city_val = str(cities_row[j]) if pd.notna(cities_row[j]) else ''
-            metric_val = str(metrics_row[j]) if pd.notna(metrics_row[j]) else ''
-
-            # Для первого столбца – это номенклатура
+        for j in range(len(header_city)):
             if j == 0:
+                # Первый столбец – номенклатура
                 new_columns.append("Товар")
                 continue
 
-            # Пытаемся извлечь город из значения
-            extracted_city = extract_city_from_string(city_val)
-            if extracted_city:
-                current_city = extracted_city
+            city_val = str(header_city[j]) if pd.notna(header_city[j]) else ''
+            metric_val = str(header_metric[j]) if pd.notna(header_metric[j]) else ''
+
+            # Извлекаем город из значения (если он там есть)
+            extracted = extract_city_from_string(city_val)
+            if extracted:
+                current_city = extracted
 
             if current_city:
-                # Если метрика пустая – оставляем только город (редко)
                 col_name = f"{current_city} | {metric_val}" if metric_val else current_city
             else:
-                col_name = metric_val
-
+                col_name = metric_val if metric_val else f"Col_{j}"
             new_columns.append(col_name)
 
-        # Проверяем, что длина совпадает
-        if len(new_columns) != data_df.shape[1]:
-            st.error("Не совпадает количество столбцов после обработки заголовков.")
-            st.stop()
-
-        data_df.columns = new_columns
-        df = data_df.copy()
+        # Присваиваем новые имена столбцам
+        df_data.columns = new_columns
+        df = df_data.copy()
 
         # Первый столбец – товар
         df["Товар"] = df["Товар"].astype(str).fillna("Без названия")
@@ -147,7 +149,7 @@ if uploaded_file is not None:
             need = (daily_sales * target_days) - city_df["Остаток"] - city_df["В пути"]
             city_df["К заказу"] = np.ceil(np.maximum(need, 0)).astype(int)
 
-            # ABC-анализ по общим продажам (здесь продажи = среднедневные × дни отчёта)
+            # Для ABC-анализа считаем общие продажи за период
             city_df["Продажи за период"] = daily_sales * days_in_report
             total_sales = city_df["Продажи за период"].sum()
             if total_sales == 0:
