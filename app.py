@@ -153,7 +153,13 @@ if uploaded_file is not None:
         for city, cdf in city_data.items():
             matrix[city] = matrix.index.map(lambda p: cdf.loc[p, 'К заказу'] if p in cdf.index else 0)
 
-        # Генерация Excel-файла
+        # --- Добавляем столбец "Итого" (сумма по строке) ---
+        matrix['Итого'] = matrix.sum(axis=1)
+
+        # (Опционально) Можно добавить итоговую строку "Всего" по городам
+        # matrix.loc['Всего'] = matrix.sum(axis=0)
+
+        # Генерация Excel-файла (теперь с Итого)
         def generate_excel(matrix, city_data):
             output = BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
