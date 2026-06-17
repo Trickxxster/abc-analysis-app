@@ -312,7 +312,10 @@ if uploaded_file is not None:
             st.metric(f'Всего единиц к заказу в г. {selected_city}', total_order)
 
     with tab3:
-        st.subheader('Продажи товара по городам')
+        st.subheader('Интерактивные графики продаж')
+        
+        # ---- 1. График по выбранному товару ----
+        st.markdown("#### Продажи выбранного товара по городам")
         all_products = sorted(matrix.index.tolist())
         selected_product = st.selectbox('Выберите товар', all_products, key='product_select')
         if selected_product:
@@ -323,15 +326,40 @@ if uploaded_file is not None:
                 else:
                     sales_data[city] = 0
             sales_df = pd.DataFrame(list(sales_data.items()), columns=['Город', 'Продажи, шт.'])
-            fig = px.bar(
+            fig1 = px.bar(
                 sales_df, x='Город', y='Продажи, шт.',
                 title=f'Продажи за период: {selected_product}',
                 labels={'Продажи, шт.': 'Продано за период'},
                 text_auto=True, color='Продажи, шт.',
                 color_continuous_scale='Viridis'
             )
-            fig.update_layout(xaxis_tickangle=-45)
-            st.plotly_chart(fig, use_container_width=True)
+            fig1.update_layout(xaxis_tickangle=-45)
+            st.plotly_chart(fig1, use_container_width=True)
+        
+        # ---- 2. Суммарные продажи по всем товарам (все города) ----
+        st.markdown("---")
+        st.markdown("#### Суммарные продажи по всем товарам (все города)")
+        
+        # Собираем суммарные продажи для каждого товара
+        total_sales_per_product = {}
+        for city, cdf in st.session_state.city_data.items():
+            for product in cdf.index:
+                total_sales_per_product[product] = total_sales_per_product.get(product, 0) + cdf.loc[product, 'Продажи за период']
+        
+        # Сортируем по убыванию
+        sorted_products = sorted(total_sales_per_product.items(), key=lambda x: x[1], reverse=True)
+        df_total = pd.DataFrame(sorted_products, columns=['Товар', 'Суммарные продажи, шт.'])
+        
+        # Строим столбчатую диаграмму (можно ограничить количество, но покажем все)
+        fig2 = px.bar(
+            df_total, x='Товар', y='Суммарные продажи, шт.',
+            title='Суммарные продажи по всем товарам (все города)',
+            labels={'Суммарные продажи, шт.': 'Продано за период'},
+            text_auto=True, color='Суммарные продажи, шт.',
+            color_continuous_scale='Plasma'
+        )
+        fig2.update_layout(xaxis_tickangle=-90)  # чтобы надписи не налезали
+        st.plotly_chart(fig2, use_container_width=True)
 
 else:
     st.info('👈 Загрузите Excel-файл через боковую панель, чтобы начать работу.')
