@@ -3,6 +3,8 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 from io import BytesIO
+from openpyxl.styles import PatternFill, Font
+from openpyxl.utils import get_column_letter
 
 st.set_page_config(page_title="📊 Расчёт заказа и ABC-анализ", layout="wide")
 st.title("📊 Автоматизация расчёта заказа и ABC-анализ (с ручной корректировкой)")
@@ -49,10 +51,6 @@ def recalculate_all(df_raw, class_indices, target_days, days_in_report, manual_o
         if block.isnull().all().all():
             continue
 
-        # Индексы внутри блока (относительно start_col):
-        # 0: Класс, 1: Количество (продажи за период), 2: Остаток (свободный? но мы берём итоговый),
-        # 3: Свободный остаток, 4: Товары в пути, 5: Итоговый остаток, 6: Ср. продажи в день,
-        # 7: Себестоимость, 8: Остаток по себест., 9: Расчёт к заказу в днях
         col_sales_period = start_col + 1   # Количество (продано за период)
         col_ost = start_col + 5            # Итоговый остаток
         col_in_transit = start_col + 4     # Товары в пути
@@ -63,14 +61,10 @@ def recalculate_all(df_raw, class_indices, target_days, days_in_report, manual_o
         for col in ['Продано за период', 'Остаток', 'В пути']:
             city_df[col] = safe_convert_to_float(city_df[col])
 
-        # Вычисляем среднедневные продажи
         daily_sales = city_df['Продано за период'] / days_in_report
-
-        # Расчёт потребности
         need = (daily_sales * target_days) - city_df['Остаток'] - city_df['В пути']
         raw_need = np.ceil(np.maximum(need, 0)).astype(int)
 
-        # Применяем ручные правки
         order_col = []
         for idx_row, product in enumerate(city_df['Товар']):
             key = (city, product)
@@ -80,9 +74,7 @@ def recalculate_all(df_raw, class_indices, target_days, days_in_report, manual_o
                 order_col.append(int(raw_need[idx_row]))
         city_df['К заказу'] = order_col
 
-        # Для ABC-анализа используем Продано за период
         total_sales = city_df['Продано за период'].sum()
-
         if total_sales == 0:
             city_df['Категория ABC'] = 'C'
         else:
@@ -104,7 +96,6 @@ def recalculate_all(df_raw, class_indices, target_days, days_in_report, manual_o
             city_df = city_df.merge(sorted_df[['Товар', 'Категория ABC']], on='Товар', how='left')
 
         city_df.set_index('Товар', inplace=True)
-        # Оставляем только нужные столбцы
         city_df = city_df[['Остаток', 'Продано за период', 'В пути', 'К заказу', 'Категория ABC']]
         city_data[city] = city_df
     return city_data
@@ -116,6 +107,55 @@ def build_matrix(city_data):
         matrix[city] = matrix.index.map(lambda p: cdf.loc[p, 'К заказу'] if p in cdf.index else 0)
     matrix['Итого'] = matrix.sum(axis=1)
     return matrix
+
+# ------------------------------------------------------------
+# Форматирование Excel
+# ------------------------------------------------------------
+def apply_excel_formatting(writer):
+    """Применяет стили к Excel-файлу: голубая шапка, чередование строк, жирный шрифт для строк с заказом > 0."""
+    wb = writer.book
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        # 1. Шапка (первая строка) – голубой фон + жирный шрифт
+        header_fill = PatternFill(start_color="ADD8E6", end_color="ADD8E6", fill_type="solid")
+        header_font = Font(bold=True)
+        for col in range(1, ws.max_column + 1):
+            cell = ws.cell(row=1, column=col)
+            cell.fill = header_fill
+            cell.font = header_font
+
+        # 2. Чередование строк (белый / светло-серый)
+        light_gray = PatternFill(start_color="F0F0F0", end_color="F0F0F0", fill_type="solid")
+        white = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+        for row in range(2, ws.max_row + 1):
+            fill = light_gray if row % 2 == 0 else white
+            for col in range(1, ws.max_column + 1):
+                ws.cell(row=row, column=col).fill = fill
+
+        # 3. Жирный шрифт для строк, где "К заказу" > 0 (или "Итого" > 0 для сводной)
+        # Определяем, есть ли столбец "К заказу"
+        col_order = None
+        col_total = None
+        for col in range(1, ws.max_column + 1):
+            val = ws.cell(row=1, column=col).value
+            if val == "К заказу":
+                col_order = col
+            elif val == "Итого":
+                col_total = col
+        # Для листов с "К заказу" (детализация)
+        if col_order is not None:
+            for row in range(2, ws.max_row + 1):
+                val = ws.cell(row=row, column=col_order).value
+                if val is not None and isinstance(val, (int, float)) and val > 0:
+                    for col in range(1, ws.max_column + 1):
+                        ws.cell(row=row, column=col).font = Font(bold=True)
+        # Для сводной матрицы (есть столбец "Итого")
+        elif col_total is not None:
+            for row in range(2, ws.max_row + 1):
+                val = ws.cell(row=row, column=col_total).value
+                if val is not None and isinstance(val, (int, float)) and val > 0:
+                    for col in range(1, ws.max_column + 1):
+                        ws.cell(row=row, column=col).font = Font(bold=True)
 
 # ------------------------------------------------------------
 # Инициализация состояния
@@ -253,6 +293,8 @@ if uploaded_file is not None:
                     sheet = cdf.reset_index()[['Товар', 'Остаток', 'Продано за период', 'В пути',
                                                'К заказу', 'Категория ABC']]
                     sheet.to_excel(writer, sheet_name=str(city)[:31], index=False)
+                # Применяем стилизацию
+                apply_excel_formatting(writer)
             output.seek(0)
             return output
 
@@ -350,13 +392,11 @@ if uploaded_file is not None:
         st.markdown("---")
         st.markdown("#### Суммарные продажи по всем товарам (все города)")
         
-        # Собираем суммарные продажи для каждого товара
         total_sales_per_product = {}
         for city, cdf in st.session_state.city_data.items():
             for product in cdf.index:
                 total_sales_per_product[product] = total_sales_per_product.get(product, 0) + cdf.loc[product, 'Продано за период']
         
-        # Сортируем по убыванию
         sorted_products = sorted(total_sales_per_product.items(), key=lambda x: x[1], reverse=True)
         df_total = pd.DataFrame(sorted_products, columns=['Товар', 'Суммарные продажи, шт.'])
         
