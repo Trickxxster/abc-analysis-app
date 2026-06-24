@@ -62,7 +62,7 @@ def recalculate_all(df_raw, class_indices, target_days, days_in_report, manual_o
             city_df[col] = safe_convert_to_float(city_df[col])
 
         daily_sales = city_df['Продано за период'] / days_in_report
-        city_df['Среднедневные продажи'] = daily_sales.round(4)  # для индикатора дефицита
+        city_df['Среднедневные продажи'] = daily_sales.round(4)
 
         need = (daily_sales * target_days) - city_df['Остаток'] - city_df['В пути']
         raw_need = np.ceil(np.maximum(need, 0)).astype(int)
@@ -157,19 +157,29 @@ def apply_excel_formatting(writer, city_data):
         if col_order is not None:
             for row in range(2, ws.max_row + 1):
                 val = ws.cell(row=row, column=col_order).value
-                if val is not None and isinstance(val, (int, float)) and val > 0:
-                    for col in range(1, ws.max_column + 1):
-                        ws.cell(row=row, column=col).font = Font(bold=True)
+                # Если это формула – извлекаем результат
+                if val is not None:
+                    try:
+                        val = float(val)
+                    except:
+                        val = 0
+                    if val > 0:
+                        for col in range(1, ws.max_column + 1):
+                            ws.cell(row=row, column=col).font = Font(bold=True)
         elif col_total is not None:
             for row in range(2, ws.max_row + 1):
                 val = ws.cell(row=row, column=col_total).value
-                if val is not None and isinstance(val, (int, float)) and val > 0:
-                    for col in range(1, ws.max_column + 1):
-                        ws.cell(row=row, column=col).font = Font(bold=True)
+                if val is not None:
+                    try:
+                        val = float(val)
+                    except:
+                        val = 0
+                    if val > 0:
+                        for col in range(1, ws.max_column + 1):
+                            ws.cell(row=row, column=col).font = Font(bold=True)
 
         # 4. Красный фон для строк с дефицитом (только на листах городов)
         if sheet_name in city_data:
-            # Найдём столбец "Дефицит"
             col_def = None
             for col in range(1, ws.max_column + 1):
                 if ws.cell(row=1, column=col).value == "Дефицит":
@@ -181,6 +191,64 @@ def apply_excel_formatting(writer, city_data):
                     if ws.cell(row=row, column=col_def).value == "⚠️ Дефицит":
                         for col in range(1, ws.max_column + 1):
                             ws.cell(row=row, column=col).fill = red_fill
+
+# ------------------------------------------------------------
+# Генерация Excel с формулами в сводной матрице
+# ------------------------------------------------------------
+def generate_excel(matrix, city_data):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # 1. Записываем листы городов и запоминаем позиции
+        city_order_col = {}
+        city_product_rows = {}
+        for city, cdf in city_data.items():
+            sheet_name = str(city)[:31]
+            df_city = cdf.reset_index()
+            df_city.to_excel(writer, sheet_name=sheet_name, index=False)
+            ws = writer.sheets[sheet_name]
+            # Находим столбец "К заказу"
+            col_order = None
+            for col in range(1, ws.max_column + 1):
+                if ws.cell(row=1, column=col).value == "К заказу":
+                    col_order = col
+                    break
+            if col_order is None:
+                continue
+            city_order_col[city] = col_order
+            # Запоминаем строки товаров
+            product_rows = {}
+            for row in range(2, ws.max_row + 1):
+                product_name = ws.cell(row=row, column=1).value
+                if product_name is not None:
+                    product_rows[product_name] = row
+            city_product_rows[city] = product_rows
+
+        # 2. Создаём сводную матрицу с формулами
+        matrix_sheet = writer.book.create_sheet("Сводная матрица")
+        headers = ["Товар"] + list(city_data.keys()) + ["Итого"]
+        for col_idx, header in enumerate(headers, start=1):
+            matrix_sheet.cell(row=1, column=col_idx, value=header)
+
+        for row_idx, product in enumerate(matrix.index, start=2):
+            matrix_sheet.cell(row=row_idx, column=1, value=product)
+            for col_idx, city in enumerate(city_data.keys(), start=2):
+                if city in city_product_rows and product in city_product_rows[city]:
+                    row_num = city_product_rows[city][product]
+                    col_letter = get_column_letter(city_order_col[city])
+                    formula = f"='{city}'!{col_letter}{row_num}"
+                    matrix_sheet.cell(row=row_idx, column=col_idx, value=formula)
+                else:
+                    matrix_sheet.cell(row=row_idx, column=col_idx, value=0)
+            # Итого – сумма
+            col_start = 2
+            col_end = 2 + len(city_data) - 1
+            sum_formula = f"=SUM({get_column_letter(col_start)}{row_idx}:{get_column_letter(col_end)}{row_idx})"
+            matrix_sheet.cell(row=row_idx, column=col_end + 1, value=sum_formula)
+
+        # 3. Стилизация
+        apply_excel_formatting(writer, city_data)
+    output.seek(0)
+    return output
 
 # ------------------------------------------------------------
 # Инициализация состояния
@@ -314,18 +382,6 @@ if uploaded_file is not None:
     with tab1:
         st.subheader('Общая потребность в дозаказе по городам')
         st.dataframe(matrix, use_container_width=True)
-
-        def generate_excel(matrix, city_data):
-            output = BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                matrix.to_excel(writer, sheet_name='Сводная матрица', index=True)
-                for city, cdf in city_data.items():
-                    sheet = cdf.reset_index()[['Товар', 'Остаток', 'Продано за период', 'Среднедневные продажи',
-                                               'В пути', 'К заказу', 'Дефицит', 'Категория ABC']]
-                    sheet.to_excel(writer, sheet_name=str(city)[:31], index=False)
-                apply_excel_formatting(writer, city_data)
-            output.seek(0)
-            return output
 
         excel_data = generate_excel(matrix, city_data)
         st.download_button(
