@@ -157,7 +157,6 @@ def apply_excel_formatting(writer, city_data):
         if col_order is not None:
             for row in range(2, ws.max_row + 1):
                 val = ws.cell(row=row, column=col_order).value
-                # Если это формула – извлекаем результат
                 if val is not None:
                     try:
                         val = float(val)
@@ -494,6 +493,60 @@ if uploaded_file is not None:
         )
         fig2.update_layout(xaxis_tickangle=-90)
         st.plotly_chart(fig2, use_container_width=True)
+        
+        # ---- 3. НОВЫЙ ГРАФИК: Остатки по городам с дефицитом ----
+        st.markdown("---")
+        st.markdown("#### Остатки выбранного товара по городам (с индикацией дефицита)")
+        
+        if selected_product:
+            stock_data = {}
+            deficit_data = {}
+            for city, cdf in st.session_state.city_data.items():
+                if selected_product in cdf.index:
+                    stock_data[city] = cdf.loc[selected_product, 'Остаток']
+                    deficit_data[city] = cdf.loc[selected_product, 'Дефицит'] == '⚠️ Дефицит'
+                else:
+                    stock_data[city] = 0
+                    deficit_data[city] = False
+            
+            stock_df = pd.DataFrame({
+                'Город': list(stock_data.keys()),
+                'Остаток, шт.': list(stock_data.values()),
+                'Дефицит': list(deficit_data.values())
+            })
+            
+            # Цвета: красный если дефицит, иначе синий
+            colors = ['red' if d else 'blue' for d in stock_df['Дефицит']]
+            
+            fig3 = px.bar(
+                stock_df,
+                x='Город',
+                y='Остаток, шт.',
+                title=f'Остатки: {selected_product}',
+                labels={'Остаток, шт.': 'Остаток на складе'},
+                text='Остаток, шт.',
+                color='Дефицит',
+                color_discrete_map={True: 'red', False: 'blue'},
+                hover_data={'Остаток, шт.': True, 'Дефицит': True}
+            )
+            fig3.update_traces(
+                texttemplate='%{text:.0f}',
+                textposition='outside',
+                textfont_color='black'
+            )
+            fig3.update_layout(
+                xaxis_tickangle=-45,
+                legend_title_text='Статус',
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="right",
+                    x=1
+                )
+            )
+            st.plotly_chart(fig3, use_container_width=True)
+            st.caption("🔴 Красный – дефицит (остаток < среднедневные продажи × 3 дня)")
 
 else:
     st.info('👈 Загрузите Excel-файл через боковую панель, чтобы начать работу.')
