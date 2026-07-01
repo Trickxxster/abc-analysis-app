@@ -76,7 +76,6 @@ def recalculate_all(df_raw, class_indices, target_days, days_in_report, manual_o
                 order_col.append(int(raw_need[idx_row]))
         city_df['К заказу'] = order_col
 
-        # Индикатор дефицита (остаток < среднедневные * 3)
         def deficit_flag(row):
             if row['Среднедневные продажи'] == 0:
                 return 'Норма'
@@ -86,7 +85,6 @@ def recalculate_all(df_raw, class_indices, target_days, days_in_report, manual_o
                 return 'Норма'
         city_df['Дефицит'] = city_df.apply(deficit_flag, axis=1)
 
-        # ABC-анализ
         total_sales = city_df['Продано за период'].sum()
         if total_sales == 0:
             city_df['Категория ABC'] = 'C'
@@ -123,13 +121,12 @@ def build_matrix(city_data):
     return matrix
 
 # ------------------------------------------------------------
-# Форматирование Excel (с дефицитом)
+# Форматирование Excel
 # ------------------------------------------------------------
 def apply_excel_formatting(writer, city_data):
     wb = writer.book
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
-        # 1. Шапка – голубая
         header_fill = PatternFill(start_color="ADD8E6", end_color="ADD8E6", fill_type="solid")
         header_font = Font(bold=True)
         for col in range(1, ws.max_column + 1):
@@ -137,7 +134,6 @@ def apply_excel_formatting(writer, city_data):
             cell.fill = header_fill
             cell.font = header_font
 
-        # 2. Чередование строк
         light_gray = PatternFill(start_color="F0F0F0", end_color="F0F0F0", fill_type="solid")
         white = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
         for row in range(2, ws.max_row + 1):
@@ -145,7 +141,6 @@ def apply_excel_formatting(writer, city_data):
             for col in range(1, ws.max_column + 1):
                 ws.cell(row=row, column=col).fill = fill
 
-        # 3. Жирный шрифт для заказа > 0 (в сводной – Итого > 0)
         col_order = None
         col_total = None
         for col in range(1, ws.max_column + 1):
@@ -177,7 +172,6 @@ def apply_excel_formatting(writer, city_data):
                         for col in range(1, ws.max_column + 1):
                             ws.cell(row=row, column=col).font = Font(bold=True)
 
-        # 4. Красный фон для строк с дефицитом (только на листах городов)
         if sheet_name in city_data:
             col_def = None
             for col in range(1, ws.max_column + 1):
@@ -192,12 +186,11 @@ def apply_excel_formatting(writer, city_data):
                             ws.cell(row=row, column=col).fill = red_fill
 
 # ------------------------------------------------------------
-# Генерация Excel с формулами в сводной матрице
+# Генерация Excel с формулами
 # ------------------------------------------------------------
 def generate_excel(matrix, city_data):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        # 1. Записываем листы городов и запоминаем позиции
         city_order_col = {}
         city_product_rows = {}
         for city, cdf in city_data.items():
@@ -205,7 +198,6 @@ def generate_excel(matrix, city_data):
             df_city = cdf.reset_index()
             df_city.to_excel(writer, sheet_name=sheet_name, index=False)
             ws = writer.sheets[sheet_name]
-            # Находим столбец "К заказу"
             col_order = None
             for col in range(1, ws.max_column + 1):
                 if ws.cell(row=1, column=col).value == "К заказу":
@@ -214,7 +206,6 @@ def generate_excel(matrix, city_data):
             if col_order is None:
                 continue
             city_order_col[city] = col_order
-            # Запоминаем строки товаров
             product_rows = {}
             for row in range(2, ws.max_row + 1):
                 product_name = ws.cell(row=row, column=1).value
@@ -222,7 +213,6 @@ def generate_excel(matrix, city_data):
                     product_rows[product_name] = row
             city_product_rows[city] = product_rows
 
-        # 2. Создаём сводную матрицу с формулами
         matrix_sheet = writer.book.create_sheet("Сводная матрица")
         headers = ["Товар"] + list(city_data.keys()) + ["Итого"]
         for col_idx, header in enumerate(headers, start=1):
@@ -238,13 +228,11 @@ def generate_excel(matrix, city_data):
                     matrix_sheet.cell(row=row_idx, column=col_idx, value=formula)
                 else:
                     matrix_sheet.cell(row=row_idx, column=col_idx, value=0)
-            # Итого – сумма
             col_start = 2
             col_end = 2 + len(city_data) - 1
             sum_formula = f"=SUM({get_column_letter(col_start)}{row_idx}:{get_column_letter(col_end)}{row_idx})"
             matrix_sheet.cell(row=row_idx, column=col_end + 1, value=sum_formula)
 
-        # 3. Стилизация
         apply_excel_formatting(writer, city_data)
     output.seek(0)
     return output
@@ -306,7 +294,6 @@ if uploaded_file is not None:
         st.session_state.manual_overrides = {}
         st.session_state.target_days = target_days
         st.session_state.days_in_report = days_in_report
-        # Пересчёт и принудительный rerun
         city_data = recalculate_all(
             st.session_state.df_raw,
             st.session_state.class_indices,
@@ -416,7 +403,6 @@ if uploaded_file is not None:
                 key=f"editor_{selected_city}"
             )
 
-            # Обновляем manual_overrides по результатам редактирования
             changed = False
             for idx, row in edited_df.iterrows():
                 product = row['Товар']
@@ -452,6 +438,7 @@ if uploaded_file is not None:
     with tab3:
         st.subheader('Интерактивные графики продаж')
         
+        # ---- 1. Продажи выбранного товара по городам ----
         st.markdown("#### Продажи выбранного товара по городам")
         all_products = sorted(matrix.index.tolist())
         selected_product = st.selectbox('Выберите товар', all_products, key='product_select')
@@ -473,17 +460,15 @@ if uploaded_file is not None:
             fig1.update_layout(xaxis_tickangle=-45)
             st.plotly_chart(fig1, use_container_width=True)
         
+        # ---- 2. Суммарные продажи по всем товарам ----
         st.markdown("---")
         st.markdown("#### Суммарные продажи по всем товарам (все города)")
-        
         total_sales_per_product = {}
         for city, cdf in st.session_state.city_data.items():
             for product in cdf.index:
                 total_sales_per_product[product] = total_sales_per_product.get(product, 0) + cdf.loc[product, 'Продано за период']
-        
         sorted_products = sorted(total_sales_per_product.items(), key=lambda x: x[1], reverse=True)
         df_total = pd.DataFrame(sorted_products, columns=['Товар', 'Суммарные продажи, шт.'])
-        
         fig2 = px.bar(
             df_total, x='Товар', y='Суммарные продажи, шт.',
             title='Суммарные продажи по всем товарам (все города)',
@@ -494,10 +479,9 @@ if uploaded_file is not None:
         fig2.update_layout(xaxis_tickangle=-90)
         st.plotly_chart(fig2, use_container_width=True)
         
-        # ---- 3. График остатков с дефицитом ----
+        # ---- 3. Остатки с дефицитом ----
         st.markdown("---")
         st.markdown("#### Остатки выбранного товара по городам (с индикацией дефицита)")
-        
         if selected_product:
             stock_data = {}
             deficit_data = {}
@@ -508,13 +492,11 @@ if uploaded_file is not None:
                 else:
                     stock_data[city] = 0
                     deficit_data[city] = False
-            
             stock_df = pd.DataFrame({
                 'Город': list(stock_data.keys()),
                 'Остаток, шт.': list(stock_data.values()),
                 'Дефицит': list(deficit_data.values())
             })
-            
             fig3 = px.bar(
                 stock_df,
                 x='Город',
@@ -526,42 +508,23 @@ if uploaded_file is not None:
                 color_discrete_map={True: 'red', False: 'blue'},
                 hover_data={'Остаток, шт.': True, 'Дефицит': True}
             )
-            fig3.update_traces(
-                texttemplate='%{text:.0f}',
-                textposition='outside',
-                textfont_color='black'
-            )
-            fig3.update_layout(
-                xaxis_tickangle=-45,
-                legend_title_text='Статус',
-                legend=dict(
-                    orientation="h",
-                    yanchor="bottom",
-                    y=1.02,
-                    xanchor="right",
-                    x=1
-                )
-            )
+            fig3.update_traces(texttemplate='%{text:.0f}', textposition='outside', textfont_color='black')
+            fig3.update_layout(xaxis_tickangle=-45, legend_title_text='Статус',
+                               legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
             st.plotly_chart(fig3, use_container_width=True)
             st.caption("🔴 Красный – дефицит (остаток < среднедневные продажи × 3 дня)")
 
-        # ---- 4. НОВЫЙ ГРАФИК: Продажи и остатки по товарам в выбранном городе ----
+        # ---- 4. Продажи и остатки по товарам в выбранном городе ----
         st.markdown("---")
         st.markdown("#### Продажи и остатки по товарам в выбранном городе")
-        
         city_for_plot = st.selectbox(
             'Выберите город для отображения продаж и остатков',
             list(city_data.keys()),
             key='city_for_sales_stock'
         )
-        
         if city_for_plot:
             cdf = city_data[city_for_plot].reset_index()
-            # Сортируем по продажам по убыванию, чтобы самые продаваемые были слева
             cdf_sorted = cdf.sort_values('Продано за период', ascending=False)
-            # Ограничим количество товаров для читаемости (например, топ-30), но можно показать все
-            # Если товаров больше 30, можно показать все, но тогда график может быть перегружен.
-            # Дадим пользователю выбор: показать все или топ-N.
             show_top = st.radio(
                 "Показать:",
                 ["Все товары", "Топ-20 по продажам", "Топ-50 по продажам"],
@@ -572,9 +535,6 @@ if uploaded_file is not None:
                 cdf_sorted = cdf_sorted.head(20)
             elif show_top == "Топ-50 по продажам":
                 cdf_sorted = cdf_sorted.head(50)
-            # else: все
-            
-            # Подготовка данных для grouped bar
             fig4 = px.bar(
                 cdf_sorted,
                 x='Товар',
@@ -585,20 +545,62 @@ if uploaded_file is not None:
                 text_auto=True,
                 color_discrete_map={'Продано за период': 'royalblue', 'Остаток': 'orange'}
             )
-            fig4.update_layout(
-                xaxis_tickangle=-45,
-                legend_title_text='',
-                legend=dict(
-                    orientation="h",
-                    yanchor="bottom",
-                    y=1.02,
-                    xanchor="right",
-                    x=1
-                )
-            )
+            fig4.update_layout(xaxis_tickangle=-45, legend_title_text='',
+                               legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
             fig4.update_traces(textposition='outside')
             st.plotly_chart(fig4, use_container_width=True)
             st.caption("📊 Синий – продажи за период, оранжевый – текущий остаток. Сортировка по убыванию продаж.")
+
+        # ---- 5. НОВЫЕ ГРАФИКИ ДЕФИЦИТА (упущенной выгоды) ----
+        st.markdown("---")
+        st.markdown("#### 📉 Дефицит (неудовлетворённый спрос) – «К заказу»")
+
+        # Собираем суммарный К заказу по городам
+        order_by_city = {}
+        for city, cdf in st.session_state.city_data.items():
+            order_by_city[city] = cdf['К заказу'].sum()
+        df_order_city = pd.DataFrame(list(order_by_city.items()), columns=['Город', 'Суммарный заказ, шт.'])
+        df_order_city = df_order_city.sort_values('Суммарный заказ, шт.', ascending=False)
+
+        fig5 = px.bar(
+            df_order_city,
+            x='Город',
+            y='Суммарный заказ, шт.',
+            title='Суммарный дефицит по городам (все товары)',
+            labels={'Суммарный заказ, шт.': 'Количество к заказу'},
+            text_auto=True,
+            color='Суммарный заказ, шт.',
+            color_continuous_scale='Reds'
+        )
+        fig5.update_layout(xaxis_tickangle=-45)
+        st.plotly_chart(fig5, use_container_width=True)
+        st.caption("Высота столбца показывает, сколько единиц товара необходимо заказать в каждом городе.")
+
+        # Топ товаров по суммарному заказу (по всем городам)
+        st.markdown("#### Топ-товаров по дефициту (все города)")
+        # Собираем суммарный заказ по товарам
+        order_by_product = {}
+        for city, cdf in st.session_state.city_data.items():
+            for product in cdf.index:
+                order_by_product[product] = order_by_product.get(product, 0) + cdf.loc[product, 'К заказу']
+        sorted_products_order = sorted(order_by_product.items(), key=lambda x: x[1], reverse=True)
+        df_order_product = pd.DataFrame(sorted_products_order, columns=['Товар', 'Суммарный заказ, шт.'])
+        # Покажем топ-20
+        df_order_product_top = df_order_product.head(20)
+
+        fig6 = px.bar(
+            df_order_product_top,
+            x='Товар',
+            y='Суммарный заказ, шт.',
+            title='Топ-20 товаров по дефициту (все города)',
+            labels={'Суммарный заказ, шт.': 'Количество к заказу'},
+            text_auto=True,
+            color='Суммарный заказ, шт.',
+            color_continuous_scale='OrRd'
+        )
+        fig6.update_layout(xaxis_tickangle=-90)
+        st.plotly_chart(fig6, use_container_width=True)
+        st.caption("Показаны товары с наибольшим суммарным заказом. Если товара нет в списке – дефицит по нему отсутствует.")
 
 else:
     st.info('👈 Загрузите Excel-файл через боковую панель, чтобы начать работу.')
