@@ -460,26 +460,7 @@ if uploaded_file is not None:
             fig1.update_layout(xaxis_tickangle=-45)
             st.plotly_chart(fig1, use_container_width=True)
         
-        # ---- 2. Суммарные продажи по всем товарам ----
-        st.markdown("---")
-        st.markdown("#### Суммарные продажи по всем товарам (все города)")
-        total_sales_per_product = {}
-        for city, cdf in st.session_state.city_data.items():
-            for product in cdf.index:
-                total_sales_per_product[product] = total_sales_per_product.get(product, 0) + cdf.loc[product, 'Продано за период']
-        sorted_products = sorted(total_sales_per_product.items(), key=lambda x: x[1], reverse=True)
-        df_total = pd.DataFrame(sorted_products, columns=['Товар', 'Суммарные продажи, шт.'])
-        fig2 = px.bar(
-            df_total, x='Товар', y='Суммарные продажи, шт.',
-            title='Суммарные продажи по всем товарам (все города)',
-            labels={'Суммарные продажи, шт.': 'Продано за период'},
-            text_auto=True, color='Суммарные продажи, шт.',
-            color_continuous_scale='Plasma'
-        )
-        fig2.update_layout(xaxis_tickangle=-90)
-        st.plotly_chart(fig2, use_container_width=True)
-        
-        # ---- 3. Остатки с дефицитом ----
+        # ---- 2. Остатки выбранного товара по городам (с дефицитом) ----
         st.markdown("---")
         st.markdown("#### Остатки выбранного товара по городам (с индикацией дефицита)")
         if selected_product:
@@ -497,7 +478,7 @@ if uploaded_file is not None:
                 'Остаток, шт.': list(stock_data.values()),
                 'Дефицит': list(deficit_data.values())
             })
-            fig3 = px.bar(
+            fig2 = px.bar(
                 stock_df,
                 x='Город',
                 y='Остаток, шт.',
@@ -508,11 +489,30 @@ if uploaded_file is not None:
                 color_discrete_map={True: 'red', False: 'blue'},
                 hover_data={'Остаток, шт.': True, 'Дефицит': True}
             )
-            fig3.update_traces(texttemplate='%{text:.0f}', textposition='outside', textfont_color='black')
-            fig3.update_layout(xaxis_tickangle=-45, legend_title_text='Статус',
+            fig2.update_traces(texttemplate='%{text:.0f}', textposition='outside', textfont_color='black')
+            fig2.update_layout(xaxis_tickangle=-45, legend_title_text='Статус',
                                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-            st.plotly_chart(fig3, use_container_width=True)
+            st.plotly_chart(fig2, use_container_width=True)
             st.caption("🔴 Красный – дефицит (остаток < среднедневные продажи × 3 дня)")
+
+        # ---- 3. Суммарные продажи по всем товарам (все города) ----
+        st.markdown("---")
+        st.markdown("#### Суммарные продажи по всем товарам (все города)")
+        total_sales_per_product = {}
+        for city, cdf in st.session_state.city_data.items():
+            for product in cdf.index:
+                total_sales_per_product[product] = total_sales_per_product.get(product, 0) + cdf.loc[product, 'Продано за период']
+        sorted_products = sorted(total_sales_per_product.items(), key=lambda x: x[1], reverse=True)
+        df_total = pd.DataFrame(sorted_products, columns=['Товар', 'Суммарные продажи, шт.'])
+        fig3 = px.bar(
+            df_total, x='Товар', y='Суммарные продажи, шт.',
+            title='Суммарные продажи по всем товарам (все города)',
+            labels={'Суммарные продажи, шт.': 'Продано за период'},
+            text_auto=True, color='Суммарные продажи, шт.',
+            color_continuous_scale='Plasma'
+        )
+        fig3.update_layout(xaxis_tickangle=-90)
+        st.plotly_chart(fig3, use_container_width=True)
 
         # ---- 4. Продажи и остатки по товарам в выбранном городе ----
         st.markdown("---")
@@ -551,11 +551,11 @@ if uploaded_file is not None:
             st.plotly_chart(fig4, use_container_width=True)
             st.caption("📊 Синий – продажи за период, оранжевый – текущий остаток. Сортировка по убыванию продаж.")
 
-        # ---- 5. НОВЫЕ ГРАФИКИ ДЕФИЦИТА (упущенной выгоды) ----
+        # ---- 5. Графики дефицита ----
         st.markdown("---")
         st.markdown("#### 📉 Дефицит (неудовлетворённый спрос) – «К заказу»")
 
-        # Собираем суммарный К заказу по городам
+        # Суммарный дефицит по городам
         order_by_city = {}
         for city, cdf in st.session_state.city_data.items():
             order_by_city[city] = cdf['К заказу'].sum()
@@ -576,16 +576,14 @@ if uploaded_file is not None:
         st.plotly_chart(fig5, use_container_width=True)
         st.caption("Высота столбца показывает, сколько единиц товара необходимо заказать в каждом городе.")
 
-        # Топ товаров по суммарному заказу (по всем городам)
+        # Топ товаров по дефициту
         st.markdown("#### Топ-товаров по дефициту (все города)")
-        # Собираем суммарный заказ по товарам
         order_by_product = {}
         for city, cdf in st.session_state.city_data.items():
             for product in cdf.index:
                 order_by_product[product] = order_by_product.get(product, 0) + cdf.loc[product, 'К заказу']
         sorted_products_order = sorted(order_by_product.items(), key=lambda x: x[1], reverse=True)
         df_order_product = pd.DataFrame(sorted_products_order, columns=['Товар', 'Суммарный заказ, шт.'])
-        # Покажем топ-20
         df_order_product_top = df_order_product.head(20)
 
         fig6 = px.bar(
