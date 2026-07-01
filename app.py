@@ -494,7 +494,7 @@ if uploaded_file is not None:
         fig2.update_layout(xaxis_tickangle=-90)
         st.plotly_chart(fig2, use_container_width=True)
         
-        # ---- 3. НОВЫЙ ГРАФИК: Остатки по городам с дефицитом ----
+        # ---- 3. График остатков с дефицитом ----
         st.markdown("---")
         st.markdown("#### Остатки выбранного товара по городам (с индикацией дефицита)")
         
@@ -514,9 +514,6 @@ if uploaded_file is not None:
                 'Остаток, шт.': list(stock_data.values()),
                 'Дефицит': list(deficit_data.values())
             })
-            
-            # Цвета: красный если дефицит, иначе синий
-            colors = ['red' if d else 'blue' for d in stock_df['Дефицит']]
             
             fig3 = px.bar(
                 stock_df,
@@ -547,6 +544,61 @@ if uploaded_file is not None:
             )
             st.plotly_chart(fig3, use_container_width=True)
             st.caption("🔴 Красный – дефицит (остаток < среднедневные продажи × 3 дня)")
+
+        # ---- 4. НОВЫЙ ГРАФИК: Продажи и остатки по товарам в выбранном городе ----
+        st.markdown("---")
+        st.markdown("#### Продажи и остатки по товарам в выбранном городе")
+        
+        city_for_plot = st.selectbox(
+            'Выберите город для отображения продаж и остатков',
+            list(city_data.keys()),
+            key='city_for_sales_stock'
+        )
+        
+        if city_for_plot:
+            cdf = city_data[city_for_plot].reset_index()
+            # Сортируем по продажам по убыванию, чтобы самые продаваемые были слева
+            cdf_sorted = cdf.sort_values('Продано за период', ascending=False)
+            # Ограничим количество товаров для читаемости (например, топ-30), но можно показать все
+            # Если товаров больше 30, можно показать все, но тогда график может быть перегружен.
+            # Дадим пользователю выбор: показать все или топ-N.
+            show_top = st.radio(
+                "Показать:",
+                ["Все товары", "Топ-20 по продажам", "Топ-50 по продажам"],
+                horizontal=True,
+                key='stock_sales_top'
+            )
+            if show_top == "Топ-20 по продажам":
+                cdf_sorted = cdf_sorted.head(20)
+            elif show_top == "Топ-50 по продажам":
+                cdf_sorted = cdf_sorted.head(50)
+            # else: все
+            
+            # Подготовка данных для grouped bar
+            fig4 = px.bar(
+                cdf_sorted,
+                x='Товар',
+                y=['Продано за период', 'Остаток'],
+                title=f'Продажи и остатки в городе {city_for_plot}',
+                labels={'value': 'Количество, шт.', 'variable': 'Показатель'},
+                barmode='group',
+                text_auto=True,
+                color_discrete_map={'Продано за период': 'royalblue', 'Остаток': 'orange'}
+            )
+            fig4.update_layout(
+                xaxis_tickangle=-45,
+                legend_title_text='',
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="right",
+                    x=1
+                )
+            )
+            fig4.update_traces(textposition='outside')
+            st.plotly_chart(fig4, use_container_width=True)
+            st.caption("📊 Синий – продажи за период, оранжевый – текущий остаток. Сортировка по убыванию продаж.")
 
 else:
     st.info('👈 Загрузите Excel-файл через боковую панель, чтобы начать работу.')
